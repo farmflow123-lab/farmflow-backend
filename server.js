@@ -18,4 +18,14 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
-app.get
+app.app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', message: 'FarmFlow API is running' });
+});
+
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/admin', adminRoutes);
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
