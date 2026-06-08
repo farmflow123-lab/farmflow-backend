@@ -18,7 +18,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
-app.app.get('/api/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'FarmFlow API is running' });
 });
 
