@@ -12,14 +12,14 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Username and password required.' });
     }
     const result = await db.query(
-      'SELECT * FROM admins WHERE username = $1 AND is_active = true',
+      'SELECT * FROM admins WHERE username = $1',
       [username.toLowerCase().trim()]
     );
     if (!result.rows.length) {
       return res.status(401).json({ success: false, message: 'Invalid username or password.' });
     }
     const admin = result.rows[0];
-    const isValid = await bcrypt.compare(password, admin.password_hash);
+    const isValid = await bcrypt.compare(password, admin.password);
     if (!isValid) {
       return res.status(401).json({ success: false, message: 'Invalid username or password.' });
     }
