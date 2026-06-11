@@ -3,7 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const db = require('../db/db');
 const { requireAuth, logActivity } = require('../middleware/auth');
-const { generateFarmFlowId } = require('../utils/helpers');
+const { generateFarmFlowId } = require('../utils/idGenerator');
 
 router.post('/register', async (req, res) => {
   const client = await db.pool.connect();
@@ -11,7 +11,7 @@ router.post('/register', async (req, res) => {
     await client.query('BEGIN');
     const { userType, fullName, phoneNumber, email, password, state, lga, town, ninNumber, bvnNumber, bankName, bankAccount } = req.body;
 
-    if (!userType || !fullName || !phoneNumber || !password) {
+    if (!userType || !fullName || !phoneNumber || !password || !state || !lga) {
       return res.status(400).json({ success: false, message: 'Required fields missing' });
     }
 
@@ -21,26 +21,24 @@ router.post('/register', async (req, res) => {
     }
 
     const dupCheck = await client.query(
-      'SELECT id FROM users WHERE phone = $1 OR email = $2',
-      [phoneNumber, email || null]
+      'SELECT id FROM users WHERE phone = $1',
+      [phoneNumber]
     );
     if (dupCheck.rows.length) {
-      return res.status(409).json({ success: false, message: 'Phone or email already registered' });
+      return res.status(409).json({ success: false, message: 'Phone already registered' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const farmflowId = await generateFarmFlowId(userType);
+    const farmflowId = await generateFarmFlowId(userType, state, lga);
 
     const userResult = await client.query(
       `INSERT INTO users (full_name, phone, email, password, role, state, lga, town, nin_number, bvn_number, bank_name, bank_account, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending') RETURNING *`,
-      [fullName, phoneNumber, email || null, hashedPassword, userType, state, lga, town, ninNumber || null, bvnNumber || null, bankName || null, bankAccount || null]
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending') RETURNING id`,
+      [fullName, phoneNumber, email||null, hashedPassword, userType, state, lga, town||null, ninNumber||null, bvnNumber||null, bankName||null, bankAccount||null]
     );
 
-    const newUser = userResult.rows[0];
     await client.query('COMMIT');
-
-    res.status(201).json({ success: true, message: 'Registration successful! Awaiting approval.', farmflowId, userId: newUser.id });
+    res.status(201).json({ success: true, message: 'Registration successful! Awaiting approval.', farmflowId, userId: userResult.rows[0].id });
 
   } catch (err) {
     await client.query('ROLLBACK');
@@ -58,27 +56,26 @@ router.get('/', requireAuth, async (req, res) => {
     if (role) { conditions.push(`role = $${i++}`); params.push(role); }
     if (status) { conditions.push(`status = $${i++}`); params.push(status); }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const countResult = await db.query(`SELECT COUNT(*) FROM users ${where}`, params);
+    const offset = (parseInt(page)-1) * parseInt(limit);
     params.push(parseInt(limit), offset);
     const usersResult = await db.query(
-      `SELECT id, full_name, phone, email, role, state, lga, town, status, nin_verified, bvn_verified, face_verified, created_at FROM users ${where} ORDER BY created_at DESC LIMIT $${i++} OFFSET $${i++}`,
+      `SELECT id, full_name, phone, email, role, state, lga, status, created_at FROM users ${where} ORDER BY created_at DESC LIMIT $${i++} OFFSET $${i++}`,
       params
     );
-    res.json({ success: true, total: parseInt(countResult.rows[0].count), users: usersResult.rows });
+    res.json({ success: true, users: usersResult.rows });
   } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
 });
 
-router.get('/stats/dashboard', requireAuth, async (req, res) => {
+router.get('/stats', requireAuth, async (req, res) => {
   try {
     const stats = await db.query(`
       SELECT
         COUNT(*) as total_users,
-        COUNT(*) FILTER (WHERE role = 'farmer') as farmers,
-        COUNT(*) FILTER (WHERE role = 'buyer') as buyers,
-        COUNT(*) FILTER (WHERE role = 'logistics') as logistics,
-        COUNT(*) FILTER (WHERE role = 'agent') as agents,
-        COUNT(*) FILTER (WHERE status = 'pending') as pending
+        COUNT(*) FILTER (WHERE role='farmer') as farmers,
+        COUNT(*) FILTER (WHERE role='buyer') as buyers,
+        COUNT(*) FILTER (WHERE role='logistics') as logistics,
+        COUNT(*) FILTER (WHERE role='agent') as agents,
+        COUNT(*) FILTER (WHERE status='pending') as pending
       FROM users
     `);
     res.json({ success: true, stats: stats.rows[0] });
@@ -87,9 +84,9 @@ router.get('/stats/dashboard', requireAuth, async (req, res) => {
 
 router.get('/:id', requireAuth, async (req, res) => {
   try {
-    const userResult = await db.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
-    if (!userResult.rows.length) return res.status(404).json({ success: false, message: 'User not found' });
-    res.json({ success: true, user: userResult.rows[0] });
+    const result = await db.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+    if (!result.rows.length) return res.status(404).json({ success: false, message: 'User not found' });
+    res.json({ success: true, user: result.rows[0] });
   } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
 });
 
@@ -97,7 +94,6 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
   try {
     const { status, reason } = req.body;
     await db.query('UPDATE users SET status = $1 WHERE id = $2', [status, req.params.id]);
-    await logActivity(req.admin.id, 'STATUS_UPDATE', req.params.id, null, `User ${status}: ${reason || ''}`, req.ip);
     res.json({ success: true, message: `User ${status} successfully` });
   } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
 });
